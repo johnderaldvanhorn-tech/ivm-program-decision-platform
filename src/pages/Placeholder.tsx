@@ -1,0 +1,2 @@
+import { Card } from '../components/ui'
+export default function Placeholder({title}:{title:string}){return <div><h1 className="text-2xl font-bold">{title}</h1><p className="mt-1 text-slate-500">MVP module shell ready for Supabase-backed records and workflows.</p><Card className="mt-6"><p className="text-sm text-slate-600">This page is included in the navigation and data model. Add the detailed forms, filters, and role-based actions in the next implementation phase.</p></Card></div>}
