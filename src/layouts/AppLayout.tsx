@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { BarChart3, Boxes, Database, FileText, Gauge, Settings, ShieldCheck, Sigma, Upload, Users, Sparkles, ListChecks, FlaskConical, TrendingUp, Microscope, BadgeCheck, Scale, ScanSearch } from 'lucide-react'
+import { BarChart3, Boxes, Database, FileText, Gauge, Settings, ShieldCheck, Sigma, Upload, Users, Sparkles, ListChecks, FlaskConical, TrendingUp, Microscope, BadgeCheck, Scale, ScanSearch, AlertTriangle } from 'lucide-react'
 
 type NavItem={label:string;to:string;icon:typeof BarChart3;end?:boolean}
 type NavGroup={label:string;description?:string;items:NavItem[]}
@@ -11,7 +11,7 @@ const phases:Phase[]=[
   {label:'Placement & Access',description:'Strategic network design',items:[{label:'Locations',to:'/locations',icon:Gauge}]},
   {label:'Inventory Availability',description:'Operational control',items:[{label:'Machines & Inventory',to:'/machines',icon:Boxes},{label:'Machine Logs',to:'/machine-logs',icon:Upload},{label:'Safety Stock',to:'/safety-stock',icon:ShieldCheck}]},
   {label:'Service Capacity',description:'Operational feasibility',items:[{label:'Staffing',to:'/staffing',icon:Users}]},
-  {label:'Data Management',items:[{label:'Imports & Readiness',to:'/data-management',icon:Database}]},
+  {label:'Data Management',items:[{label:'Imports & Readiness',to:'/data-management',icon:Database},{label:'Sync Conflicts',to:'/sync-conflicts',icon:AlertTriangle}]},
   {label:'Model & Evaluation',items:[{label:'Reports',to:'/reports',icon:FileText},{label:'Calculations',to:'/calculations',icon:Sigma}]},
   {label:'Administration',items:[{label:'Settings',to:'/settings',icon:Settings}]},
  ]},

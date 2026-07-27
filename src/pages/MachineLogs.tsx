@@ -1,4 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight, ScrollText } from 'lucide-react'
 import { Badge, Card, Field, inputClass } from '../components/ui'
 import { parseCsv, type CsvRow } from '../lib/csv'
 import { supabase } from '../lib/supabase'
@@ -174,6 +175,7 @@ export default function MachineLogs() {
   const [syncing, setSyncing] = useState(false)
   const [aliases, setAliases] = useState<MachineAlias[]>([])
   const [rememberMappings, setRememberMappings] = useState(true)
+  const [collapsedAgencies, setCollapsedAgencies] = useState<Record<string, boolean>>({})
 
   async function loadData() {
     if (!supabase) return
@@ -366,10 +368,30 @@ export default function MachineLogs() {
         failed: summary?.failed_count || 0,
         stockouts: summary?.stockout_count || 0,
         firstActivity: summary?.first_activity || null,
-      lastActivity: summary?.last_activity || null,
+        lastActivity: summary?.last_activity || null,
       }
     })
   }, [machines, eventSummaries])
+
+  const agencyGroups = useMemo(() => {
+    const groups = new Map<string, typeof machineStats>()
+    machineStats.forEach(row => {
+      const agency = row.machine.locations?.agency?.trim() || 'Agency not assigned'
+      const existing = groups.get(agency) || []
+      existing.push(row)
+      groups.set(agency, existing)
+    })
+    return [...groups.entries()]
+      .map(([agency, rows]) => ({
+        agency,
+        rows: rows.sort((a, b) => (a.machine.locations?.location_name || '').localeCompare(b.machine.locations?.location_name || '')),
+        events: rows.reduce((sum, row) => sum + row.records, 0),
+        dispensed: rows.reduce((sum, row) => sum + row.dispensed, 0),
+        failed: rows.reduce((sum, row) => sum + row.failed, 0),
+        stockouts: rows.reduce((sum, row) => sum + row.stockouts, 0),
+      }))
+      .sort((a, b) => a.agency.localeCompare(b.agency))
+  }, [machineStats])
 
   return <div className="space-y-6">
     <div><h1 className="text-2xl font-bold">Machine Logs</h1><p className="text-slate-500">Upload operational log CSV files, map each source machine, and retain the event history for analytics.</p></div>
@@ -419,6 +441,47 @@ export default function MachineLogs() {
       <Card><p className="text-xs font-semibold uppercase text-slate-500">Out-of-Stock Attempts</p><p className="mt-2 text-3xl font-bold">{stats.stockouts.toLocaleString()}</p></Card>
     </div>
 
-    <Card className="overflow-hidden p-0"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{['Machine ID','Source Name','Events','Dispensed','Failed','Stockouts','First Activity','Last Activity'].map(label => <th key={label} className="px-5 py-4">{label}</th>)}</tr></thead><tbody>{machineStats.map(row => <tr key={row.machine.id} className="border-t border-slate-100"><td className="px-5 py-4 font-semibold">{row.machine.machine_id}</td><td className="px-5 py-4">{row.machine.locations?.location_name || '—'}</td><td className="px-5 py-4">{row.records}</td><td className="px-5 py-4"><Badge tone="green">{row.dispensed}</Badge></td><td className="px-5 py-4">{row.failed}</td><td className="px-5 py-4">{row.stockouts}</td><td className="px-5 py-4">{row.firstActivity ? new Date(row.firstActivity).toLocaleString() : '—'}</td><td className="px-5 py-4">{row.lastActivity ? new Date(row.lastActivity).toLocaleString() : '—'}</td></tr>)}</tbody></table></Card>
+    <div className="space-y-4">
+      {agencyGroups.map(group => {
+        const isCollapsed = !!collapsedAgencies[group.agency]
+        return <Card key={group.agency} className="overflow-hidden p-0">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50"
+            onClick={() => setCollapsedAgencies(current => ({ ...current, [group.agency]: !isCollapsed }))}
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <ScrollText size={19} className="shrink-0 text-blue-600" />
+              <div className="min-w-0">
+                <h2 className="truncate font-bold text-slate-900">{group.agency}</h2>
+                <p className="text-xs text-slate-500">{group.rows.length} machines • {group.events.toLocaleString()} events</p>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge tone="green">{group.dispensed.toLocaleString()} dispensed</Badge>
+              <Badge tone="slate">{group.failed.toLocaleString()} failed</Badge>
+              <Badge tone={group.stockouts > 0 ? 'yellow' : 'slate'}>{group.stockouts.toLocaleString()} stockouts</Badge>
+              {isCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+            </div>
+          </button>
+          {!isCollapsed && <div className="overflow-x-auto border-t border-slate-200">
+            <table className="w-full min-w-[1050px] text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{['Machine ID','Source Name','City / State','Events','Dispensed','Failed','Stockouts','First Activity','Last Activity'].map(label => <th key={label} className="px-5 py-3">{label}</th>)}</tr></thead>
+              <tbody>{group.rows.map(row => <tr key={row.machine.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <td className="px-5 py-4 font-semibold">{row.machine.machine_id}</td>
+                <td className="px-5 py-4">{row.machine.locations?.location_name || '—'}</td>
+                <td className="px-5 py-4">{[row.machine.locations?.city, row.machine.locations?.state].filter(Boolean).join(', ') || '—'}</td>
+                <td className="px-5 py-4">{row.records.toLocaleString()}</td>
+                <td className="px-5 py-4"><Badge tone="green">{row.dispensed.toLocaleString()}</Badge></td>
+                <td className="px-5 py-4">{row.failed.toLocaleString()}</td>
+                <td className="px-5 py-4">{row.stockouts.toLocaleString()}</td>
+                <td className="px-5 py-4">{row.firstActivity ? new Date(row.firstActivity).toLocaleString() : '—'}</td>
+                <td className="px-5 py-4">{row.lastActivity ? new Date(row.lastActivity).toLocaleString() : '—'}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>}
+        </Card>
+      })}
+    </div>
   </div>
 }

@@ -1,5 +1,5 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Building2, ChevronDown, ChevronRight, ChevronUp, Download, FileDown, List, Map as MapIcon, Plus, Upload } from 'lucide-react'
+import { AlertTriangle, Building2, ChevronDown, ChevronRight, ChevronUp, Download, FileDown, List, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Badge, Card, inputClass } from '../components/ui'
 import { downloadTextFile, parseCsv, toCsv, type CsvRow } from '../lib/csv'
@@ -158,6 +158,9 @@ export default function Locations() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [view, setView] = useState<'table' | 'map'>('table')
   const [mapMetric, setMapMetric] = useState<'accessibility' | 'risk' | 'maximum'>('maximum')
+  const [deleteTarget, setDeleteTarget] = useState<AgencyGroup | null>(null)
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [deletingAgency, setDeletingAgency] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const loadLocations = async () => {
@@ -201,6 +204,35 @@ export default function Locations() {
       .map(([agency, groupRows]) => ({ agency, rows: groupRows.sort((a, b) => a.machine_id.localeCompare(b.machine_id)) }))
       .sort((a, b) => a.agency.localeCompare(b.agency))
   }, [filtered])
+
+  const deleteAgency = async () => {
+    if (!deleteTarget || deleteConfirmation.trim() !== deleteTarget.agency) return
+    if (!supabase) {
+      setMessage('Supabase is not configured. Agency deletion is unavailable.')
+      return
+    }
+
+    setDeletingAgency(true)
+    setMessage('')
+    try {
+      const { data, error } = await supabase.rpc('delete_agency_cascade', {
+        p_agency: deleteTarget.agency,
+        p_confirmation: deleteConfirmation.trim(),
+      })
+      if (error) throw error
+      const result = Array.isArray(data) ? data[0] : data
+      const deletedAgency = deleteTarget.agency
+      const fallbackCount = deleteTarget.rows.length
+      setDeleteTarget(null)
+      setDeleteConfirmation('')
+      setMessage(`Deleted ${result?.deleted_locations ?? fallbackCount} location(s) and all machine-linked records for ${deletedAgency}.`)
+      await loadLocations()
+    } catch (error) {
+      setMessage(error instanceof Error ? `Agency deletion failed: ${error.message}` : 'Agency deletion failed.')
+    } finally {
+      setDeletingAgency(false)
+    }
+  }
 
   const exportLocations = () => downloadTextFile(`ivm-locations-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(filtered as unknown as Record<string, unknown>[], headers))
   const downloadTemplate = () => downloadTextFile('ivm-location-import-template.csv', toCsv([{
@@ -283,12 +315,15 @@ export default function Locations() {
           return <div className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${tone}`}><span className="text-[9px] font-bold uppercase tracking-wide opacity-80">{label}</span><span className="text-sm font-extrabold leading-none">{percent == null ? '—' : `${percent}%`}</span></div>
         }
         return <Card key={group.agency} className="overflow-hidden p-0">
-          <button type="button" onClick={() => setCollapsed((current) => ({ ...current, [group.agency]: !isCollapsed }))} className="flex w-full items-center gap-3 px-4 py-2 text-left hover:bg-slate-50">
-            <div className="rounded-md bg-blue-50 p-1.5 text-blue-600"><Building2 size={16}/></div>
-            <div className="min-w-0 flex-1"><div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"><h2 className="truncate text-sm font-bold text-slate-900">{group.agency}</h2><span className="text-[11px] text-slate-500">{group.rows.length} machine{group.rows.length === 1 ? '' : 's'} · {activeCount} active</span></div></div>
+          <div className="flex w-full items-center gap-3 px-4 py-2 hover:bg-slate-50">
+            <button type="button" onClick={() => setCollapsed((current) => ({ ...current, [group.agency]: !isCollapsed }))} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+              <div className="rounded-md bg-blue-50 p-1.5 text-blue-600"><Building2 size={16}/></div>
+              <div className="min-w-0 flex-1"><div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"><h2 className="truncate text-sm font-bold text-slate-900">{group.agency}</h2><span className="text-[11px] text-slate-500">{group.rows.length} machine{group.rows.length === 1 ? '' : 's'} · {activeCount} active</span></div></div>
+            </button>
             <div className="ml-auto hidden items-center gap-1.5 md:flex"><CompactScore label="Access" value={avgAccessibility}/><CompactScore label="Risk" value={avgRisk} kind="risk"/><CompactScore label="Maximum" value={avgMaximum}/></div>
-            <span className="rounded-full border border-slate-200 p-1 text-slate-500">{isCollapsed ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}</span>
-          </button>
+            <button type="button" onClick={() => { setDeleteTarget(group); setDeleteConfirmation('') }} title={`Delete ${group.agency}`} className="rounded-full border border-rose-200 p-1.5 text-rose-600 transition hover:bg-rose-50"><Trash2 size={14}/></button>
+            <button type="button" onClick={() => setCollapsed((current) => ({ ...current, [group.agency]: !isCollapsed }))} className="rounded-full border border-slate-200 p-1 text-slate-500">{isCollapsed ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}</button>
+          </div>
 
           {!isCollapsed && <><div className="flex flex-wrap gap-1.5 border-t border-slate-100 bg-slate-50 px-3 py-1.5 md:hidden"><CompactScore label="Access" value={avgAccessibility}/><CompactScore label="Risk" value={avgRisk} kind="risk"/><CompactScore label="Maximum" value={avgMaximum}/></div><div className="overflow-x-auto border-t border-slate-100"><table className="w-full min-w-[1240px] text-left text-sm"><thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500"><tr>{['Machine ID','Location / Facility','Address','City','State','ZIP','Accessibility','Risk Score','Maximum Location Score',''].map((heading) => <th key={heading} className="px-4 py-3">{heading}</th>)}</tr></thead><tbody>{group.rows.map((row) => { const facility = row.location_name || 'Unspecified Location'; return <tr key={row.machine_id} className="border-t border-slate-100 hover:bg-slate-50/70">
               <td colSpan={10} className="p-0">
@@ -315,5 +350,20 @@ export default function Locations() {
     </div>}
 
     <Card><div className="grid gap-4 md:grid-cols-3"><div><p className="text-xs font-bold uppercase tracking-wide text-emerald-600">High Score · 67–100%</p><p className="mt-1 text-sm text-slate-600">Strong accessibility or maximum location potential. For risk, lower is better.</p></div><div><p className="text-xs font-bold uppercase tracking-wide text-amber-600">Moderate · 34–66%</p><p className="mt-1 text-sm text-slate-600">Review the underlying access and risk inputs.</p></div><div><p className="text-xs font-bold uppercase tracking-wide text-rose-600">Low Score · 0–33%</p><p className="mt-1 text-sm text-slate-600">Weak accessibility or location potential. A high risk percentage is also shown in red.</p></div></div></Card>
+
+    {deleteTarget && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-agency-title">
+      <div className="w-full max-w-xl rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-start gap-3 border-b border-slate-200 p-5">
+          <div className="rounded-full bg-rose-100 p-2 text-rose-700"><AlertTriangle size={22}/></div>
+          <div className="min-w-0 flex-1"><h2 id="delete-agency-title" className="text-lg font-bold text-slate-900">Delete agency and all related data?</h2><p className="mt-1 text-sm text-slate-600">This permanently deletes <strong>{deleteTarget.agency}</strong>, its {deleteTarget.rows.length} machine{deleteTarget.rows.length === 1 ? '' : 's'}, and all records linked to those machines.</p></div>
+          <button type="button" onClick={() => { if (!deletingAgency) { setDeleteTarget(null); setDeleteConfirmation('') } }} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100"><X size={20}/></button>
+        </div>
+        <div className="space-y-4 p-5">
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"><p className="font-bold">The deletion includes:</p><p className="mt-1">Locations, machines, planograms, machine logs, restock history, safety stock, inventory periods, service assignments, demand settings, optimization recommendations, and machine sync mappings. Technicians are retained if they service other agencies.</p></div>
+          <label className="block"><span className="text-sm font-semibold text-slate-700">Type the agency name to confirm</span><input autoFocus className={`${inputClass} mt-1`} value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder={deleteTarget.agency}/></label>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-200 p-4"><button type="button" disabled={deletingAgency} onClick={() => { setDeleteTarget(null); setDeleteConfirmation('') }} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Cancel</button><button type="button" disabled={deletingAgency || deleteConfirmation.trim() !== deleteTarget.agency} onClick={() => void deleteAgency()} className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 size={16}/>{deletingAgency ? 'Deleting…' : 'Delete agency permanently'}</button></div>
+      </div>
+    </div>}
   </div>
 }
