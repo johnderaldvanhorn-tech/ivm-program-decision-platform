@@ -53,10 +53,6 @@ export type ReportingData = {
   serviceDemand: any[]
   restockEvents: any[]
   demandParameters: any[]
-  machineEvents: any[]
-  machineAliases: any[]
-  inventoryPeriods: any[]
-  safetyStock: any[]
 }
 
 const asArray = (value: any) => Array.isArray(value) ? value : value ? [value] : []
@@ -66,23 +62,14 @@ const money = (value: any) => new Intl.NumberFormat('en-US', { style: 'currency'
 const date = (value: any) => value ? new Date(value).toLocaleDateString() : '—'
 const daysBetween = (a: string, b: string) => Math.max(1, Math.ceil((new Date(b).getTime() - new Date(a).getTime()) / 86400000) + 1)
 
-async function safeSelect(table: string, query = '*', pageSize = 1000) {
+async function safeSelect(table: string, query = '*', limit = 10000) {
   if (!supabase) return []
-  const rows: any[] = []
-  for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
-      .from(table)
-      .select(query)
-      .range(from, from + pageSize - 1)
-    if (error) {
-      console.warn(`Reporting query failed for ${table}:`, error.message)
-      return rows
-    }
-    const page = data ?? []
-    rows.push(...page)
-    if (page.length < pageSize) break
+  const { data, error } = await supabase.from(table).select(query).limit(limit)
+  if (error) {
+    console.warn(`Reporting query failed for ${table}:`, error.message)
+    return []
   }
-  return rows
+  return data ?? []
 }
 
 async function safeRpc(name: string, args: Record<string, unknown> = {}) {
@@ -96,34 +83,16 @@ async function safeRpc(name: string, args: Record<string, unknown> = {}) {
 }
 
 export async function loadReportingData(): Promise<ReportingData> {
-  const [
-    locations,
-    machines,
-    planogram,
-    machineSummary,
-    logTotals,
-    technicianSummary,
-    serviceDemand,
-    restockEvents,
-    demandParameters,
-    machineEvents,
-    machineAliases,
-    inventoryPeriods,
-    safetyStock,
-  ] = await Promise.all([
+  const [locations, machines, planogram, machineSummary, logTotals, technicianSummary, serviceDemand, restockEvents, demandParameters] = await Promise.all([
     safeSelect('locations', '*,location_access_scores(*),location_demographics(*)'),
     safeSelect('machines', '*'),
     safeSelect('machine_planogram_items', '*'),
     safeRpc('get_machine_log_machine_summary'),
     safeRpc('get_machine_log_totals'),
     safeRpc('get_staffing_technician_summary'),
-    safeRpc('get_machine_service_demand_summary'),
-    safeSelect('restock_events', '*'),
+    Promise.resolve([]),
+    safeSelect('restock_events', '*', 20000),
     safeSelect('demand_evaluation_parameters', '*'),
-    safeSelect('machine_events', '*'),
-    safeSelect('machine_name_aliases', '*'),
-    safeSelect('inventory_periods', '*'),
-    safeSelect('safety_stock', '*'),
   ])
   return {
     locations,
@@ -135,24 +104,27 @@ export async function loadReportingData(): Promise<ReportingData> {
     serviceDemand: asArray(serviceDemand),
     restockEvents,
     demandParameters,
-    machineEvents,
-    machineAliases,
-    inventoryPeriods,
-    safetyStock,
   }
 }
 
+function relatedRecord(value: any) {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null
+}
+function normalizedScore(value: any) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : 0
+}
 function accessScore(location: any) {
-  const row = asArray(location.location_access_scores)[0]
-  return num(row?.machine_accessibility_score)
+  const row = relatedRecord(location.location_access_scores)
+  return normalizedScore(row?.machine_accessibility_score)
 }
 function riskScore(location: any) {
-  const row = asArray(location.location_demographics)[0]
-  return num(row?.risk_score)
+  const row = relatedRecord(location.location_demographics)
+  return normalizedScore(row?.risk_score)
 }
 function maxLocationScore(location: any) {
-  const row = asArray(location.location_demographics)[0]
-  return num(row?.maximum_location_score)
+  const row = relatedRecord(location.location_demographics)
+  return normalizedScore(row?.maximum_location_score)
 }
 function urbanRural(location: any) {
   const row = asArray(location.location_demographics)[0]
@@ -222,10 +194,10 @@ function baseMachineRows(data: ReportingData) {
       capacity: items.reduce((sum, p) => sum + num(p.max_level), 0) || num(m.capacity),
       par: items.reduce((sum, p) => sum + num(p.par_level), 0),
       selections: items.length,
-      events: num(s.events),
-      dispensed: num(s.dispensed),
-      failed: num(s.failed),
-      stockouts: num(s.stockouts),
+      events: num(s.event_count ?? s.events),
+      dispensed: num(s.units_dispensed ?? s.dispensed),
+      failed: num(s.failed_count ?? s.failed),
+      stockouts: num(s.stockout_count ?? s.stockouts),
       firstActivity: s.first_activity,
       lastActivity: s.last_activity,
       restockVisits: num(service.visits || service.restock_visits),

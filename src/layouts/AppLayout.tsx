@@ -7,7 +7,7 @@ type Phase={label:string;tone:'blue'|'violet';groups:NavGroup[]}
 
 const phases:Phase[]=[
  {label:'Phase 1 — Operations',tone:'blue',groups:[
-  {label:'Program Overview',items:[{label:'Dashboard',to:'/',icon:BarChart3,end:true},{label:'Operations Analyzer',to:'/operations-analyzer',icon:ScanSearch}]},
+  {label:'Program Overview',items:[{label:'Command Center',to:'/',icon:BarChart3,end:true},{label:'Operations Analyzer',to:'/operations-analyzer',icon:ScanSearch}]},
   {label:'Placement & Access',description:'Strategic network design',items:[{label:'Locations',to:'/locations',icon:Gauge}]},
   {label:'Inventory Availability',description:'Operational control',items:[{label:'Machines & Inventory',to:'/machines',icon:Boxes},{label:'Machine Logs',to:'/machine-logs',icon:Upload},{label:'Safety Stock',to:'/safety-stock',icon:ShieldCheck}]},
   {label:'Service Capacity',description:'Operational feasibility',items:[{label:'Staffing',to:'/staffing',icon:Users}]},

@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   Printer,
   RefreshCw,
+  Search,
   X,
 } from "lucide-react";
 import { loadReportingData } from "../lib/reporting";
@@ -16,6 +17,7 @@ import {
   exportReportPdf,
   printReport,
 } from "../lib/reportExport";
+import { supabase } from "../lib/supabase";
 import type { ReportModel } from "../lib/reporting";
 
 const n = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -23,40 +25,82 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 const date = (v: any) => (v ? new Date(v).toLocaleDateString() : "—");
 const avg = (a: number[]) =>
   a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0;
+const relatedRecord = <T,>(value: T[] | T | null | undefined): T | null =>
+  Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+const scoreValue = (value: unknown): number | null => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(1, parsed)) : null;
+};
+const avgScored = (values: Array<number | null>) => {
+  const scored = values.filter((value): value is number => value !== null);
+  return avg(scored);
+};
+
+const normalizeProduct = (value: string | null | undefined) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const productFamily = (value: string | null | undefined) => {
+  const normalized = normalizeProduct(value);
+  if (normalized.includes("narcan") || normalized.includes("naloxone")) {
+    return "naloxone";
+  }
+  return normalized;
+};
+
+const normalizeSelection = (value: string | number | null | undefined) =>
+  String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "");
+
+const parseSelectionRange = (value: string | number | null | undefined) => {
+  const normalized = normalizeSelection(value);
+  if (!normalized) return null;
+  const match = normalized.match(/^(\d+)(?:[-–—](\d+))?$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2] ?? match[1]);
+  return { start: Math.min(start, end), end: Math.max(start, end) };
+};
+
+const planogramSelectionContains = (
+  planogramSelection: string | number | null | undefined,
+  eventSelection: string | number | null | undefined,
+) => {
+  const planogramRange = parseSelectionRange(planogramSelection);
+  const eventRange = parseSelectionRange(eventSelection);
+  if (!planogramRange || !eventRange) return false;
+  return (
+    eventRange.start >= planogramRange.start &&
+    eventRange.start <= planogramRange.end
+  );
+};
+
+const machineKey = (value: unknown) => String(value ?? "").trim().toLowerCase();
+
+const machineSummaryFor = (data: any, machine: any) =>
+  (data?.machineSummary ?? []).find((row: any) =>
+    row.machine_uuid === machine.id ||
+    row.machine_id === machine.id ||
+    row.machine_wtn_id === machine.machine_id ||
+    row.source_name === machine.machine_id,
+  );
+
+const summaryDispensed = (row: any) =>
+  n(row?.units_dispensed ?? row?.dispensed);
+
+const summaryStockouts = (row: any) =>
+  n(row?.stockout_count ?? row?.stockouts);
+
 const days = (a: string, b: string) =>
   Math.max(
     1,
     Math.ceil((new Date(b).getTime() - new Date(a).getTime()) / 86400000) + 1,
   );
-
-const normalize = (value: any) =>
-  String(value ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
-const canonicalProduct = (value: any) => {
-  const normalized = normalize(value);
-  if (/\b(narcan|naloxone)\b/.test(normalized)) return "naloxone / narcan";
-  return normalized;
-};
-
-const parseSelectionRange = (value: any): [number, number] | null => {
-  const text = String(value ?? "").trim();
-  const match = text.match(/^(\d+)\s*[-–—]\s*(\d+)$/);
-  if (match) return [Number(match[1]), Number(match[2])];
-  if (/^\d+$/.test(text)) {
-    const number = Number(text);
-    return [number, number];
-  }
-  return null;
-};
-
-const selectionContains = (planSelection: any, eventSelection: any) => {
-  const range = parseSelectionRange(planSelection);
-  const event = Number(String(eventSelection ?? "").trim());
-  return Boolean(range && Number.isFinite(event) && event >= range[0] && event <= range[1]);
-};
 
 type Formula = {
   title: string;
@@ -246,14 +290,26 @@ const formulas: Record<string, Formula[]> = {
 
 export default function OperationsAnalyzer() {
   const [data, setData] = useState<any>(null),
+    [events, setEvents] = useState<any[]>([]),
     [loading, setLoading] = useState(true);
   const [agency, setAgency] = useState(""),
     [locationId, setLocationId] = useState(""),
     [machineId, setMachineId] = useState(""),
     [selectedProducts, setSelectedProducts] = useState<string[]>([]),
     [productMenuOpen, setProductMenuOpen] = useState(false),
+    [productSearch, setProductSearch] = useState(""),
     [startDate, setStartDate] = useState(""),
     [endDate, setEndDate] = useState("");
+  const [appliedFilters, setAppliedFilters] = useState({
+    agency: "",
+    locationId: "",
+    machineId: "",
+    selectedProducts: [] as string[],
+    startDate: "",
+    endDate: "",
+  });
+  const [hasReviewed, setHasReviewed] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const [formulaOpen, setFormulaOpen] = useState(false),
     [formulaTab, setFormulaTab] = useState("Location"),
     [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -261,7 +317,53 @@ export default function OperationsAnalyzer() {
     setLoading(true);
     const d = await loadReportingData();
     setData(d);
+    setEvents([]);
+    setHasReviewed(false);
     setLoading(false);
+  }
+
+  async function reviewSelection() {
+    if (!data) return;
+    setReviewing(true);
+
+    const nextFilters = {
+      agency,
+      locationId,
+      machineId,
+      selectedProducts: [...selectedProducts],
+      startDate,
+      endDate,
+    };
+
+    if (supabase) {
+      const selectedLocations = (data.locations ?? []).filter((l: any) =>
+        (!agency || l.agency === agency) && (!locationId || l.id === locationId),
+      );
+      const selectedLocationIds = new Set(selectedLocations.map((l: any) => l.id));
+      const selectedMachines = (data.machines ?? []).filter((m: any) =>
+        (!machineId || m.id === machineId) &&
+        (!agency && !locationId || selectedLocationIds.has(m.location_id)),
+      );
+      const machineUuids = selectedMachines.map((m: any) => m.id).filter(Boolean);
+
+      let query = supabase
+        .from("machine_events")
+        .select(
+          "machine_uuid,machine_wtn_id,event_datetime,product,quantity,event_type,action,status,message,error_type,selection",
+        );
+
+      if (machineUuids.length) query = query.in("machine_uuid", machineUuids);
+      if (startDate) query = query.gte("event_datetime", startDate);
+      if (endDate) query = query.lte("event_datetime", `${endDate}T23:59:59`);
+
+      const { data: eventRows, error } = await query.limit(50000);
+      if (error) console.warn("Operations Analyzer event query failed:", error.message);
+      setEvents(eventRows ?? []);
+    }
+
+    setAppliedFilters(nextFilters);
+    setHasReviewed(true);
+    setReviewing(false);
   }
   useEffect(() => {
     load();
@@ -306,101 +408,169 @@ export default function OperationsAnalyzer() {
       ).sort() as string[],
     [data],
   );
+  const visibleProducts = useMemo(() => {
+    const query = productSearch.trim().toLowerCase();
+    if (!query) return products;
+    return products.filter((productName) =>
+      productName.toLowerCase().includes(query),
+    );
+  }, [products, productSearch]);
+  const appliedLocations = useMemo(
+    () =>
+      (data?.locations ?? []).filter(
+        (l: any) =>
+          (!appliedFilters.agency || l.agency === appliedFilters.agency) &&
+          (!appliedFilters.locationId || l.id === appliedFilters.locationId),
+      ),
+    [data, appliedFilters.agency, appliedFilters.locationId],
+  );
+  const appliedMachines = useMemo(() => {
+    const locationIds = new Set(appliedLocations.map((l: any) => l.id));
+    return (data?.machines ?? []).filter(
+      (m: any) =>
+        (!appliedFilters.machineId || m.id === appliedFilters.machineId) &&
+        (!appliedFilters.agency && !appliedFilters.locationId ||
+          locationIds.has(m.location_id)),
+    );
+  }, [data, appliedLocations, appliedFilters.agency, appliedFilters.locationId, appliedFilters.machineId]);
+
   const filtered = useMemo(() => {
-    if (!data) return null;
-    const locs = locations.filter(
-      (l: any) => !locationId || l.id === locationId,
+    if (!data || !hasReviewed) return null;
+
+    const locs = appliedLocations;
+    const selected = new Set(appliedFilters.selectedProducts);
+    const selectedFamilies = new Set(
+      appliedFilters.selectedProducts.map(productFamily).filter(Boolean),
     );
-    const selectedMachines = machines.filter(
-      (m: any) => !machineId || m.id === machineId,
+
+    const selectedMachineKeys = new Set(
+      appliedMachines
+        .flatMap((machine: any) => [machine.id, machine.machine_id, machine.machine_uuid, machine.machine_wtn_id])
+        .map(machineKey)
+        .filter(Boolean),
     );
-    const machineByUuid = new Map(selectedMachines.map((m: any) => [m.id, m]));
-    const machineByWtn = new Map(selectedMachines.map((m: any) => [m.machine_id, m]));
-    const aliases = (data.machineAliases ?? []).filter((alias: any) => !alias.ignored);
-    const machineByAlias = new Map<string, any>();
-    aliases.forEach((alias: any) => {
-      const machine = machineByUuid.get(alias.machine_uuid || alias.machine_id) || machineByWtn.get(alias.machine_wtn_id);
-      if (machine && alias.source_machine_name) machineByAlias.set(normalize(alias.source_machine_name), machine);
-    });
-    const machineForRecord = (record: any) => {
-      const uuid = record.machine_uuid || record.machine_id;
-      const wtn = record.machine_wtn_id;
-      const source = normalize(record.source_machine_name || record.source_name || record.machine_name || record.location_name);
-      return machineByUuid.get(uuid) || machineByWtn.get(wtn) || machineByAlias.get(source) || null;
-    };
-    const selectedCanonicalProducts = new Set(selectedProducts.map(canonicalProduct));
-    const allPlans = (data.planogram ?? []).filter((p: any) => {
-      const machine = machineByUuid.get(p.machine_uuid || p.machine_id) || machineByWtn.get(p.machine_wtn_id);
-      return Boolean(machine);
-    });
-    const plans = allPlans.filter((p: any) =>
-      selectedCanonicalProducts.size === 0 || selectedCanonicalProducts.has(canonicalProduct(p.product_name)),
-    );
-    const planRowsForMachine = (machine: any) => allPlans.filter((p: any) =>
-      (p.machine_uuid || p.machine_id) === machine.id || p.machine_wtn_id === machine.machine_id,
-    );
-    const productMatchesRecord = (record: any, machine: any) => {
-      if (selectedCanonicalProducts.size === 0) return true;
-      const directProduct = canonicalProduct(record.product || record.product_name);
-      if (directProduct && selectedCanonicalProducts.has(directProduct)) return true;
-      const selection = record.selection || record.selection_number || record.selection_id;
-      return planRowsForMachine(machine).some((plan: any) =>
-        selectedCanonicalProducts.has(canonicalProduct(plan.product_name)) &&
-        selectionContains(plan.selection || plan.selection_number, selection),
+
+    const belongsToSelectedMachine = (row: any) =>
+      [row.machine_uuid, row.machine_id, row.machine_wtn_id]
+        .map(machineKey)
+        .some((key) => key && selectedMachineKeys.has(key));
+
+    const allPlans = (data.planogram ?? []).filter(belongsToSelectedMachine);
+    const plans = selected.size === 0
+      ? allPlans
+      : allPlans.filter((plan: any) => {
+          const exactProduct = String(plan.product_name || "").trim();
+          return (
+            selected.has(exactProduct) ||
+            selectedFamilies.has(productFamily(exactProduct))
+          );
+        });
+
+    const plansByMachine = new Map<string, any[]>();
+    for (const plan of allPlans) {
+      for (const key of [plan.machine_uuid, plan.machine_id, plan.machine_wtn_id]
+        .map(machineKey)
+        .filter(Boolean)) {
+        const current = plansByMachine.get(key) ?? [];
+        current.push(plan);
+        plansByMachine.set(key, current);
+      }
+    }
+
+    const matchingPlansByMachine = new Map<string, any[]>();
+    for (const plan of plans) {
+      for (const key of [plan.machine_uuid, plan.machine_id, plan.machine_wtn_id]
+        .map(machineKey)
+        .filter(Boolean)) {
+        const current = matchingPlansByMachine.get(key) ?? [];
+        current.push(plan);
+        matchingPlansByMachine.set(key, current);
+      }
+    }
+
+    const productMatches = (row: any) => {
+      if (selected.size === 0) return true;
+
+      const rowKeys = [row.machine_uuid, row.machine_id, row.machine_wtn_id]
+        .map(machineKey)
+        .filter(Boolean);
+      const machinePlans = rowKeys.flatMap((key) => plansByMachine.get(key) ?? []);
+      const matchingMachinePlans = rowKeys.flatMap(
+        (key) => matchingPlansByMachine.get(key) ?? [],
+      );
+
+      const uniqueMachinePlans = Array.from(
+        new Map(machinePlans.map((plan: any) => [String(plan.id ?? `${plan.selection_number}|${plan.product_name}`), plan])).values(),
+      );
+      const uniqueMatchingPlans = Array.from(
+        new Map(matchingMachinePlans.map((plan: any) => [String(plan.id ?? `${plan.selection_number}|${plan.product_name}`), plan])).values(),
+      );
+
+      if (uniqueMachinePlans.length > 0 && uniqueMatchingPlans.length === uniqueMachinePlans.length) {
+        return true;
+      }
+
+      const selection = row.selection ?? row.selection_number;
+      if (normalizeSelection(selection)) {
+        return uniqueMatchingPlans.some((plan: any) =>
+          planogramSelectionContains(plan.selection_number, selection),
+        );
+      }
+
+      const exactProduct = String(row.product_name ?? row.product ?? "").trim();
+      return (
+        selected.has(exactProduct) ||
+        selectedFamilies.has(productFamily(exactProduct))
       );
     };
-    const restocks = (data.restockEvents ?? []).filter((r: any) => {
-      const machine = machineForRecord(r);
-      if (!machine) return false;
-      if (!productMatchesRecord(r, machine)) return false;
-      if (startDate && r.restock_datetime && r.restock_datetime < startDate) return false;
-      if (endDate && r.restock_datetime && r.restock_datetime > `${endDate}T23:59:59`) return false;
-      return true;
-    });
-    const ev = (data.machineEvents ?? []).filter((e: any) => {
-      const machine = machineForRecord(e);
-      if (!machine) return false;
-      if (!productMatchesRecord(e, machine)) return false;
-      if (startDate && e.event_datetime && e.event_datetime < startDate) return false;
-      if (endDate && e.event_datetime && e.event_datetime > `${endDate}T23:59:59`) return false;
-      return true;
-    });
-    const unresolvedEvents = (data.machineEvents ?? []).filter((event: any) => !machineForRecord(event)).length;
-    const unresolvedRestocks = (data.restockEvents ?? []).filter((event: any) => !machineForRecord(event)).length;
+
+    const restocks = (data.restockEvents ?? []).filter(
+      (row: any) =>
+        belongsToSelectedMachine(row) &&
+        productMatches(row) &&
+        (!appliedFilters.startDate || row.restock_datetime >= appliedFilters.startDate) &&
+        (!appliedFilters.endDate || row.restock_datetime <= `${appliedFilters.endDate}T23:59:59`),
+    );
+
+    const filteredEvents = events.filter(
+      (row: any) =>
+        belongsToSelectedMachine(row) &&
+        productMatches(row) &&
+        (!appliedFilters.startDate || row.event_datetime >= appliedFilters.startDate) &&
+        (!appliedFilters.endDate || row.event_datetime <= `${appliedFilters.endDate}T23:59:59`),
+    );
+
     return {
       locs,
-      machines: selectedMachines,
+      machines: appliedMachines,
       plans,
       restocks,
-      events: ev,
-      diagnostics: {
-        unresolvedEvents,
-        unresolvedRestocks,
-        aliases: aliases.length,
-        eventRows: (data.machineEvents ?? []).length,
-        restockRows: (data.restockEvents ?? []).length,
-      },
+      events: filteredEvents,
     };
   }, [
     data,
-    locations,
-    machines,
-    machineId,
-    selectedProducts,
-    startDate,
-    endDate,
-    locationId,
+    hasReviewed,
+    appliedLocations,
+    appliedMachines,
+    appliedFilters,
+    events,
   ]);
   const summary = useMemo(() => {
     if (!filtered) return null;
+    // Supabase may return embedded one-to-one relations as either an object
+    // or a single-item array. Use the same score extraction rules as Locations.
     const access = filtered.locs.map((l: any) =>
-      n(l.location_access_scores?.[0]?.machine_accessibility_score),
+      scoreValue(
+        relatedRecord<any>(l.location_access_scores)?.machine_accessibility_score,
+      ),
     );
     const risk = filtered.locs.map((l: any) =>
-      n(l.location_demographics?.[0]?.risk_score),
+      scoreValue(relatedRecord<any>(l.location_demographics)?.risk_score),
     );
     const max = filtered.locs.map((l: any) =>
-      n(l.location_demographics?.[0]?.maximum_location_score),
+      scoreValue(
+        relatedRecord<any>(l.location_demographics)?.maximum_location_score,
+      ),
     );
     const capacity = filtered.plans.reduce(
       (s: number, p: any) => s + n(p.max_level),
@@ -414,16 +584,37 @@ export default function OperationsAnalyzer() {
       (s: number, p: any) => s + n(p.current_quantity),
       0,
     );
-    const dispensed = filtered.events
+    const rawDispensed = filtered.events
       .filter((e: any) =>
         String(e.event_type || e.action || "")
           .toLowerCase()
-          .includes("dispens"),
+          .includes("dispens") ||
+        (String(e.action || "").toLowerCase() === "transactions" &&
+          String(e.status || "").toLowerCase() === "success"),
       )
       .reduce((s: number, e: any) => s + Math.max(1, n(e.quantity)), 0);
-    const stockouts = filtered.events.filter((e: any) =>
-      /stock.?out/i.test(`${e.event_type} ${e.action} ${e.status}`),
+    const machineLogDispensed = filtered.machines.reduce(
+      (total: number, machine: any) =>
+        total + summaryDispensed(machineSummaryFor(data, machine)),
+      0,
+    );
+    // Machine Logs are authoritative for all-product totals. Product-filtered
+    // totals use raw matching events because the summary RPC is machine-level.
+    const dispensed =
+      appliedFilters.selectedProducts.length === 0 ? machineLogDispensed : rawDispensed;
+    const eventStockouts = filtered.events.filter((e: any) =>
+      /stock.?out|out.?of.?stock/i.test(`${e.event_type} ${e.action} ${e.status}`),
     ).length;
+    const machineLogStockouts = filtered.machines.reduce(
+      (total: number, machine: any) =>
+        total + summaryStockouts(machineSummaryFor(data, machine)),
+      0,
+    );
+    // Machine Logs are the authoritative source for unfulfilled/out-of-stock
+    // attempts when no product filter is active. Product-filtered analysis falls
+    // back to raw matching events because the machine summary is not product-specific.
+    const stockouts =
+      appliedFilters.selectedProducts.length === 0 ? machineLogStockouts : eventStockouts;
     const visits = new Set(
       filtered.restocks.map(
         (r: any) =>
@@ -445,12 +636,17 @@ export default function OperationsAnalyzer() {
     const daily = dispensed / observed;
     const unmet = stockouts;
     const inventoryAvailability =
-      1 - stockouts / Math.max(1, filtered.events.length);
-    const effective = avg(access) * Math.max(0, inventoryAvailability);
+      dispensed + stockouts > 0
+        ? dispensed / (dispensed + stockouts)
+        : 1;
+    const averageAccess = avgScored(access);
+    const averageRisk = avgScored(risk);
+    const averageMaximum = avgScored(max);
+    const effective = averageAccess * Math.max(0, inventoryAvailability);
     return {
-      access: avg(access),
-      risk: avg(risk),
-      max: avg(max),
+      access: averageAccess,
+      risk: averageRisk,
+      max: averageMaximum,
       capacity,
       par,
       current,
@@ -464,7 +660,7 @@ export default function OperationsAnalyzer() {
       unmet,
       effective,
     };
-  }, [filtered]);
+  }, [filtered, data, appliedFilters.selectedProducts]);
   const rows = useMemo(() => {
     if (!filtered || !data) return [];
     return filtered.machines.map((m: any) => {
@@ -472,19 +668,22 @@ export default function OperationsAnalyzer() {
         data.locations.find(
           (x: any) => x.id === m.location_id || x.machine_id === m.machine_id,
         ) || {};
-      const p = filtered.plans.filter(
-        (x: any) => (x.machine_uuid || x.machine_id) === m.id,
+      const machineKeys = new Set(
+        [m.id, m.machine_id, m.machine_uuid, m.machine_wtn_id]
+          .map(machineKey)
+          .filter(Boolean),
       );
-      const r = filtered.restocks.filter(
-        (x: any) =>
-          (x.machine_uuid || x.machine_id) === m.id ||
-          x.machine_wtn_id === m.machine_id,
-      );
-      const e = filtered.events.filter(
-        (x: any) =>
-          (x.machine_uuid || x.machine_id) === m.id ||
-          x.machine_wtn_id === m.machine_id,
-      );
+      const belongsToMachine = (x: any) =>
+        [x.machine_uuid, x.machine_id, x.machine_wtn_id]
+          .map(machineKey)
+          .some((key) => key && machineKeys.has(key));
+      const p = filtered.plans.filter(belongsToMachine);
+      const r = filtered.restocks.filter(belongsToMachine);
+      const e = filtered.events.filter(belongsToMachine);
+      const machineSummary = machineSummaryFor(data, m) || {};
+      const eventStockouts = e.filter((x: any) =>
+        /stock.?out|out.?of.?stock/i.test(`${x.event_type} ${x.action} ${x.status}`),
+      ).length;
       return {
         agency: l.agency || "Unassigned",
         location: l.location_name || "Unknown",
@@ -492,16 +691,22 @@ export default function OperationsAnalyzer() {
         capacity: p.reduce((s: number, x: any) => s + n(x.max_level), 0),
         par: p.reduce((s: number, x: any) => s + n(x.par_level), 0),
         current: p.reduce((s: number, x: any) => s + n(x.current_quantity), 0),
-        dispensed: e
-          .filter((x: any) =>
-            String(x.event_type || x.action || "")
-              .toLowerCase()
-              .includes("dispens"),
-          )
-          .reduce((s: number, x: any) => s + Math.max(1, n(x.quantity)), 0),
-        stockouts: e.filter((x: any) =>
-          /stock.?out/i.test(`${x.event_type} ${x.action} ${x.status}`),
-        ).length,
+        dispensed:
+          appliedFilters.selectedProducts.length === 0
+            ? summaryDispensed(machineSummary)
+            : e
+                .filter((x: any) =>
+                  String(x.event_type || x.action || "")
+                    .toLowerCase()
+                    .includes("dispens") ||
+                  (String(x.action || "").toLowerCase() === "transactions" &&
+                    String(x.status || "").toLowerCase() === "success"),
+                )
+                .reduce((s: number, x: any) => s + Math.max(1, n(x.quantity)), 0),
+        stockouts:
+          appliedFilters.selectedProducts.length === 0
+            ? summaryStockouts(machineSummary)
+            : eventStockouts,
         visits: new Set(
           r.map((x: any) => String(x.restock_datetime).slice(0, 16)),
         ).size,
@@ -523,11 +728,11 @@ export default function OperationsAnalyzer() {
         products: p,
       };
     });
-  }, [filtered, data]);
+  }, [filtered, data, appliedFilters.selectedProducts]);
   const report = useMemo<ReportModel>(
     () => ({
       title: "Agency Operations Analyzer",
-      subtitle: `${agency || "All agencies"} · ${selectedProducts.length ? selectedProducts.join(", ") : "All products"}`,
+      subtitle: `${appliedFilters.agency || "All agencies"} · ${appliedFilters.selectedProducts.length ? appliedFilters.selectedProducts.join(", ") : "All products"}`,
       generatedAt: new Date().toISOString(),
       kpis: summary
         ? [
@@ -560,7 +765,7 @@ export default function OperationsAnalyzer() {
         },
       ],
     }),
-    [agency, selectedProducts, summary, filtered, rows],
+    [appliedFilters.agency, appliedFilters.selectedProducts, summary, filtered, rows],
   );
   function toggle(id: string) {
     setExpanded((s) => {
@@ -600,7 +805,7 @@ export default function OperationsAnalyzer() {
           </button>
         </div>
       </div>
-      <div className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-5 print:hidden">
+      <div className="grid gap-3 rounded-2xl border bg-white p-4 shadow-sm md:grid-cols-6 print:hidden">
         <select
           value={agency}
           onChange={(e) => {
@@ -666,10 +871,14 @@ export default function OperationsAnalyzer() {
                 <div className="flex gap-2 text-xs font-semibold">
                   <button
                     type="button"
-                    onClick={() => setSelectedProducts(products)}
+                    onClick={() =>
+                      setSelectedProducts((current) =>
+                        Array.from(new Set([...current, ...visibleProducts])),
+                      )
+                    }
                     className="text-blue-700 hover:underline"
                   >
-                    Select all
+                    Select matching
                   </button>
                   <button
                     type="button"
@@ -680,11 +889,37 @@ export default function OperationsAnalyzer() {
                   </button>
                 </div>
               </div>
+              <div className="relative mb-2">
+                <Search
+                  size={15}
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  type="search"
+                  value={productSearch}
+                  onChange={(event) => setProductSearch(event.target.value)}
+                  placeholder="Type a product name..."
+                  autoFocus
+                  className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-8 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                />
+                {productSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProductSearch("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    aria-label="Clear product search"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
               <div className="max-h-64 space-y-1 overflow-y-auto">
-                {products.length === 0 ? (
-                  <p className="py-3 text-sm text-slate-500">No products available.</p>
+                {visibleProducts.length === 0 ? (
+                  <p className="py-3 text-sm text-slate-500">
+                    No products match “{productSearch}”.
+                  </p>
                 ) : (
-                  products.map((productName) => {
+                  visibleProducts.map((productName) => {
                     const checked = selectedProducts.includes(productName);
                     return (
                       <label
@@ -735,7 +970,21 @@ export default function OperationsAnalyzer() {
             className="min-w-0 rounded-xl border px-2 py-2"
           />
         </div>
+        <button
+          type="button"
+          onClick={reviewSelection}
+          disabled={reviewing}
+          className="rounded-xl bg-blue-600 px-5 py-2 font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+        >
+          {reviewing ? "Loading…" : hasReviewed ? "Update Review" : "Review"}
+        </button>
       </div>
+      {!hasReviewed && (
+        <div className="rounded-2xl border border-dashed bg-white p-10 text-center">
+          <p className="text-lg font-semibold text-slate-900">Choose the scope you want to analyze</p>
+          <p className="mt-2 text-sm text-slate-500">Select an agency, location, machine, products, and date range, then choose Review to load the results.</p>
+        </div>
+      )}
       {summary ? (
         <>
           <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-8">
@@ -798,35 +1047,6 @@ export default function OperationsAnalyzer() {
             />
           </div>
         </>
-      ) : null}
-      {filtered?.diagnostics ? (
-        <section className="rounded-2xl border bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="font-bold text-slate-900">Data Connection Check</h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Confirms how much operational data is loaded and flags records that cannot be connected to a machine.
-              </p>
-            </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${filtered.diagnostics.unresolvedEvents + filtered.diagnostics.unresolvedRestocks === 0 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-              {filtered.diagnostics.unresolvedEvents + filtered.diagnostics.unresolvedRestocks === 0 ? "Connected" : "Review needed"}
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            {[
-              ["Machine log rows loaded", filtered.diagnostics.eventRows],
-              ["Restock rows loaded", filtered.diagnostics.restockRows],
-              ["Saved machine aliases", filtered.diagnostics.aliases],
-              ["Unresolved machine logs", filtered.diagnostics.unresolvedEvents],
-              ["Unresolved restocks", filtered.diagnostics.unresolvedRestocks],
-            ].map(([label, value]) => (
-              <div key={String(label)} className="rounded-xl border bg-slate-50 p-3">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
-                <p className="mt-1 text-xl font-bold text-slate-900">{Number(value).toLocaleString()}</p>
-              </div>
-            ))}
-          </div>
-        </section>
       ) : null}
       <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">
         <div className="flex items-center justify-between border-b p-5">

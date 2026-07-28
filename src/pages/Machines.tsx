@@ -220,7 +220,7 @@ export default function Machines() {
     setLoading(true)
     setMessage('')
 
-    const { error: syncError } = await supabase.rpc('sync_machines_from_locations')
+    const { error: syncError } = await client.rpc('sync_machines_from_locations')
     if (syncError) {
       setMessage(syncError.message)
       setLoading(false)
@@ -228,11 +228,11 @@ export default function Machines() {
     }
 
     const [{ data: locations, error: locationError }, { data: machineRows, error: machineError }, { data: planogramRows, error: planogramError }, { data: summaryRows, error: summaryError }, { data: aliasRows, error: aliasError }] = await Promise.all([
-      supabase.from('locations').select('id,machine_id,agency,location_name,address,city,state,zip,location_access_scores(machine_accessibility_score),location_demographics(risk_score,maximum_location_score)').not('machine_id', 'is', null).order('agency'),
-      supabase.from('machines').select('id,location_id,machine_id,capacity,current_inventory,active').order('machine_id'),
-      supabase.from('machine_planogram_items').select('machine_uuid,machine_wtn_id,current_quantity,par_level,max_level,critical_level,product_name,selection_number'),
-      supabase.rpc('get_machine_log_machine_summary'),
-      supabase.from('machine_name_aliases').select('source_machine_name,machine_id,machine_uuid,machine_wtn_id,ignored'),
+      client.from('locations').select('id,machine_id,agency,location_name,address,city,state,zip,location_access_scores(machine_accessibility_score),location_demographics(risk_score,maximum_location_score)').not('machine_id', 'is', null).order('agency'),
+      client.from('machines').select('id,location_id,machine_id,capacity,current_inventory,active').order('machine_id'),
+      client.from('machine_planogram_items').select('machine_uuid,machine_wtn_id,current_quantity,par_level,max_level,critical_level,product_name,selection_number'),
+      client.rpc('get_machine_log_machine_summary'),
+      client.from('machine_name_aliases').select('source_machine_name,machine_id,machine_uuid,machine_wtn_id,ignored'),
     ])
 
     const baseError = locationError || machineError || (planogramError?.code === '42P01' ? null : planogramError) || summaryError || (aliasError?.code === '42P01' ? null : aliasError)

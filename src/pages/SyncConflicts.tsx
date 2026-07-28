@@ -17,10 +17,10 @@ export default function SyncConflicts(){
   supabase.from('machines').select('id,machine_id,location_id,active,locations(agency,location_name,city,state)').order('machine_id'),
   supabase.from('machine_name_aliases').select('source_machine_name,machine_id,machine_uuid,machine_wtn_id,ignored'),
   supabase.rpc('get_machine_log_machine_summary')
- ]);const err=m.error||(a.error?.code==='42P01'?null:a.error)||s.error;if(err)setMessage(err.message);const normalizedMachines = (m.data || []).map((machine: any) => ({
+ ]);const err=m.error||(a.error?.code==='42P01'?null:a.error)||s.error;if(err)setMessage(err.message);setMachines((m.data||[]).map((machine:any)=>({
   ...machine,
-  locations: Array.isArray(machine.locations) ? machine.locations[0] ?? null : machine.locations,
-}));setMachines(normalizedMachines as Machine[]);setAliases((a.data||[]) as Alias[]);setSummaries((s.data||[]) as Summary[]);setLoading(false)}
+  locations:Array.isArray(machine.locations)?(machine.locations[0]??null):machine.locations,
+})) as Machine[]);setAliases((a.data||[]) as Alias[]);setSummaries((s.data||[]) as Summary[]);setLoading(false)}
  useEffect(()=>{void load()},[])
  const rows=useMemo(()=>summaries.filter(x=>x.source_name).map(summary=>{
   const source=summary.source_name!;const alias=aliases.find(a=>norm(a.source_machine_name)===norm(source));
