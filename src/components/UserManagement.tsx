@@ -2,13 +2,23 @@ import { FormEvent, useEffect, useState } from 'react'
 import { Plus, Save, Trash2, UserCog, UserRoundCheck } from 'lucide-react'
 import { Badge, Card, Field, inputClass } from './ui'
 import { createUser, deleteUser, listUsers, updateUser, type LocalUser, type PublicUser } from '../lib/localAuth'
-import { useAuth } from '../context/AuthContext'
+import { useAuth } from '../hooks/useAuth'
+import { supabase } from '../lib/supabase'
 
 type FormState = { displayName: string; email: string; role: LocalUser['role']; password: string }
 const emptyForm: FormState = { displayName: '', email: '', role: 'Viewer', password: '' }
 
 export default function UserManagement() {
-  const { user: currentUser, refreshUser } = useAuth()
+  const { user: currentUser } = useAuth()
+
+  const refreshUser = async () => {
+    const { error } = await supabase.auth.refreshSession()
+
+    if (error) {
+      console.error('Unable to refresh the authenticated user:', error)
+      throw error
+    }
+  }
   const [users, setUsers] = useState<PublicUser[]>([])
   const [form, setForm] = useState<FormState>(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)

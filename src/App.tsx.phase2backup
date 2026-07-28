@@ -1,0 +1,42 @@
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import AppLayout from './layouts/AppLayout'
+import Dashboard from './pages/Dashboard'
+import LocationForm from './pages/LocationForm'
+import Locations from './pages/Locations'
+import MachineData from './pages/MachineData'
+import Machines from './pages/Machines'
+import MachineLogs from './pages/MachineLogs'
+import Placeholder from './pages/Placeholder'
+import Calculations from './pages/Calculations'
+import DemandEvaluation from './pages/DemandEvaluation'
+import Staffing from './pages/Staffing'
+import Reports from './pages/Reports'
+import SafetyStock from './pages/SafetyStock'
+import Settings from './pages/Settings'
+import OptimizationCenter from './pages/OptimizationCenter'
+import Recommendations from './pages/Recommendations'
+import ScenarioLab from './pages/ScenarioLab'
+import Forecasting from './pages/Forecasting'
+import ResearchMode from './pages/ResearchMode'
+import ModelValidation from './pages/ModelValidation'
+import EquityAvailability from './pages/EquityAvailability'
+import DataManagement from './pages/DataManagement'
+import OperationsAnalyzer from './pages/OperationsAnalyzer'
+import SyncConflicts from './pages/SyncConflicts'
+import Login from './pages/Login'
+import Integrations from './pages/Integrations'
+import { useAuth } from './context/AuthContext'
+import ForgotPassword from './pages/ForgotPassword'
+import ResetPassword from './pages/ResetPassword'
+import AuthCallback from './pages/AuthCallback'
+import Logout from './pages/Logout'
+import { ProtectedRoute } from './components/auth/ProtectedRoute'
+function ProtectedLayout() {
+  const { user, loading } = useAuth()
+  const location = useLocation()
+  if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white">Loading…</div>
+  if (!user) return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  return <AppLayout />
+}
+
+export default function App(){return <BrowserRouter><Routes><Route path="/login" element={<Login/>}/><Route element={<ProtectedLayout/>}><Route path="/" element={<ProtectedRoute><Dashboard/></ProtectedRoute>}/><Route path="/operations-analyzer" element={<ProtectedRoute><OperationsAnalyzer/></ProtectedRoute>}/><Route path="/locations" element={<ProtectedRoute><Locations/></ProtectedRoute>}/><Route path="/locations/new" element={<ProtectedRoute><LocationForm/></ProtectedRoute>}/><Route path="/locations/:locationId" element={<ProtectedRoute><LocationForm/></ProtectedRoute>}/><Route path="/machines" element={<ProtectedRoute><Machines/></ProtectedRoute>}/><Route path="/machines/:machineId" element={<ProtectedRoute><MachineData/></ProtectedRoute>}/><Route path="/machines/:machineId/demand-evaluation" element={<ProtectedRoute><DemandEvaluation/></ProtectedRoute>}/><Route path="/inventory" element={<ProtectedRoute><Machines/></ProtectedRoute>}/><Route path="/machine-logs" element={<ProtectedRoute><MachineLogs/></ProtectedRoute>}/><Route path="/data-management" element={<ProtectedRoute><DataManagement/></ProtectedRoute>}/><Route path="/sync-conflicts" element={<ProtectedRoute><SyncConflicts/></ProtectedRoute>}/><Route path="/safety-stock" element={<ProtectedRoute><SafetyStock/></ProtectedRoute>}/><Route path="/staffing" element={<ProtectedRoute><Staffing/></ProtectedRoute>}/><Route path="/reports" element={<ProtectedRoute><Reports/></ProtectedRoute>}/><Route path="/calculations" element={<ProtectedRoute><Calculations/></ProtectedRoute>}/><Route path="/settings" element={<ProtectedRoute><Settings/></ProtectedRoute>}/><Route path="/settings/integrations" element={<ProtectedRoute><Integrations/></ProtectedRoute>}/><Route path="/phase-2/optimization" element={<ProtectedRoute><OptimizationCenter/></ProtectedRoute>}/><Route path="/phase-2/recommendations" element={<ProtectedRoute><Recommendations/></ProtectedRoute>}/><Route path="/phase-2/scenarios" element={<ProtectedRoute><ScenarioLab/></ProtectedRoute>}/><Route path="/phase-2/forecasting" element={<ProtectedRoute><Forecasting/></ProtectedRoute>}/><Route path="/phase-2/research" element={<ProtectedRoute><ResearchMode/></ProtectedRoute>}/><Route path="/phase-2/validation" element={<ProtectedRoute><ModelValidation/></ProtectedRoute>}/><Route path="/phase-2/equity" element={<ProtectedRoute><EquityAvailability/></ProtectedRoute>}/></Route><Route path="*" element={<ProtectedRoute><Navigate to="/" replace/></ProtectedRoute>}/></Routes></BrowserRouter>}
