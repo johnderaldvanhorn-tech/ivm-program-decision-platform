@@ -1,6 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, Database, Download, FileUp, Gauge, Loader2, RotateCcw, Save, Settings2, SlidersHorizontal } from 'lucide-react'
+import { CheckCircle2, Database, Download, FileUp, Gauge, Loader2, RotateCcw, Save, Settings2, SlidersHorizontal, Users } from 'lucide-react'
 import { Badge, Card, Field, inputClass } from '../components/ui'
+import UserManagement from '../components/UserManagement'
 import { supabase } from '../lib/supabase'
 import {
   DEFAULT_LOCAL_PREFERENCES,
@@ -22,7 +23,7 @@ type MappingRow = {
   sort_order: number
 }
 
-type Tab = 'model' | 'mappings' | 'operations' | 'display' | 'data'
+type Tab = 'model' | 'mappings' | 'operations' | 'display' | 'users' | 'data'
 
 const groupOrder = ['Accessibility', 'Risk', 'Risk Normalization', 'Score Thresholds', 'Inventory', 'Safety Stock', 'Staffing', 'Demand & Cost']
 
@@ -148,6 +149,7 @@ export default function Settings() {
     { key: 'mappings', label: 'Score Mappings', icon: SlidersHorizontal },
     { key: 'operations', label: 'Operational Defaults', icon: Settings2 },
     { key: 'display', label: 'Display & Workflow', icon: Settings2 },
+    { key: 'users', label: 'Users & Access', icon: Users },
     { key: 'data', label: 'Data & Backup', icon: Database },
   ]
 
@@ -158,7 +160,7 @@ export default function Settings() {
 
   return <div className="space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><div className="flex items-center gap-2"><Settings2 className="text-blue-600"/><h1 className="text-2xl font-bold text-slate-900">Settings</h1></div><p className="mt-1 text-sm text-slate-500">Manage shared model parameters, scoring lookups, operational assumptions, and local workflow preferences.</p></div>
+      <div><div className="flex items-center gap-2"><Settings2 className="text-blue-600"/><h1 className="text-2xl font-bold text-slate-900">Settings</h1></div><p className="mt-1 text-sm text-slate-500">Manage shared model parameters, scoring lookups, operational assumptions, user access, and local workflow preferences.</p></div>
       <div className="flex flex-wrap gap-2">
         <button onClick={resetAll} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><RotateCcw size={16}/>Reset Defaults</button>
         <button onClick={exportSettings} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"><Download size={16}/>Export</button>
@@ -179,6 +181,8 @@ export default function Settings() {
     {tab === 'mappings' && <div className="grid gap-4 xl:grid-cols-2">{groupedMappings.map(({group,rows}) => <Card key={group} className="p-4"><h2 className="font-bold text-slate-900">{mappingLabel(group)}</h2><p className="mt-1 text-xs text-slate-500">Edit labels and normalized scores used by location intake.</p><div className="mt-3 space-y-2">{rows.map((row) => { const index = mappings.findIndex((item) => item.mapping_group === row.mapping_group && item.category_key === row.category_key); return <div key={row.category_key} className="grid gap-2 rounded-xl border border-slate-100 p-3 sm:grid-cols-[1fr_100px]"><input className={inputClass} value={row.category_label} onChange={(e) => setMappings((current) => current.map((item,i) => i === index ? {...item,category_label:e.target.value} : item))}/><input className={inputClass} type="number" min="0" max="1" step="0.05" value={row.score} onChange={(e) => setMappings((current) => current.map((item,i) => i === index ? {...item,score:Number(e.target.value)} : item))}/></div>})}</div></Card>)}</div>}
 
     {tab === 'display' && <div className="grid gap-4 xl:grid-cols-2"><Card className="p-4"><h2 className="font-bold text-slate-900">Navigation & Display</h2><div className="mt-4 space-y-4"><Toggle label="Collapse agency groups by default" checked={preferences.agenciesCollapsedByDefault} onChange={(v) => setPreferences({...preferences,agenciesCollapsedByDefault:v})}/><Toggle label="Show demo rows when a table is empty" checked={preferences.showDemoDataWhenEmpty} onChange={(v) => setPreferences({...preferences,showDemoDataWhenEmpty:v})}/><Field label="Default Locations View"><select className={inputClass} value={preferences.defaultLocationView} onChange={(e) => setPreferences({...preferences,defaultLocationView:e.target.value as LocalPreferences['defaultLocationView']})}><option value="table">Table</option><option value="map">Map</option></select></Field><Field label="Default Map Metric"><select className={inputClass} value={preferences.defaultMapMetric} onChange={(e) => setPreferences({...preferences,defaultMapMetric:e.target.value as LocalPreferences['defaultMapMetric']})}><option value="maximum">Maximum Location Score</option><option value="accessibility">Accessibility</option><option value="risk">Risk</option></select></Field><Field label="Table Density"><select className={inputClass} value={preferences.tableDensity} onChange={(e) => setPreferences({...preferences,tableDensity:e.target.value as LocalPreferences['tableDensity']})}><option value="compact">Compact</option><option value="comfortable">Comfortable</option></select></Field></div></Card><Card className="p-4"><h2 className="font-bold text-slate-900">Workflow Defaults</h2><div className="mt-4 space-y-4"><Toggle label="Remember machine and technician import mappings" checked={preferences.rememberImportMappings} onChange={(v) => setPreferences({...preferences,rememberImportMappings:v})}/><Field label="Default Product Filter"><select className={inputClass} value={preferences.defaultProductFilter} onChange={(e) => setPreferences({...preferences,defaultProductFilter:e.target.value as LocalPreferences['defaultProductFilter']})}><option value="all">All Products</option><option value="narcan">Narcan</option></select></Field><Field label="Date Format"><select className={inputClass} value={preferences.dateFormat} onChange={(e) => setPreferences({...preferences,dateFormat:e.target.value as LocalPreferences['dateFormat']})}><option value="MM/DD/YYYY">MM/DD/YYYY</option><option value="YYYY-MM-DD">YYYY-MM-DD</option></select></Field><Field label="Default Table Page Size"><input className={inputClass} type="number" min="10" max="500" step="10" value={preferences.pageSize} onChange={(e) => setPreferences({...preferences,pageSize:Number(e.target.value)})}/></Field></div></Card></div>}
+
+    {tab === 'users' && <UserManagement/>}
 
     {tab === 'data' && <div className="grid gap-4 xl:grid-cols-2"><Card className="p-4"><div className="flex items-start gap-3"><Database className="mt-0.5 text-blue-600"/><div><h2 className="font-bold text-slate-900">Settings Storage</h2><p className="mt-1 text-sm text-slate-500">Model parameters and score mappings are shared through Supabase. Display and workflow preferences are saved on this browser.</p></div></div><div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600"><p><strong>Shared:</strong> {PARAMETER_DEFINITIONS.length} program parameters and {mappings.length} score mappings.</p><p className="mt-2"><strong>Local key:</strong> <code>{LOCAL_PREFERENCES_KEY}</code></p></div></Card><Card className="p-4"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 text-emerald-600"/><div><h2 className="font-bold text-slate-900">Backup & Restore</h2><p className="mt-1 text-sm text-slate-500">Export all settings before making major model changes. Imported settings are staged until you select Save Settings.</p></div></div><div className="mt-4 flex flex-wrap gap-2"><button onClick={exportSettings} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold"><Download size={16}/>Export JSON</button><button onClick={() => importRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold"><FileUp size={16}/>Import JSON</button></div></Card></div>}
   </div>

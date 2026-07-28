@@ -1,0 +1,107 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-ivm-admin-token',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+}
+
+function validEmail(value: unknown) {
+  return typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  if (request.method !== 'POST') return json({ ok: false, error: 'Method not allowed.' }, 405)
+
+  const expectedToken = Deno.env.get('IVM_INTEGRATION_ADMIN_TOKEN') || ''
+  const suppliedToken = request.headers.get('x-ivm-admin-token') || ''
+  if (!expectedToken || suppliedToken !== expectedToken) return json({ ok: false, error: 'Integration administrator authorization failed.' }, 401)
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+  const client = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } })
+
+  try {
+    const body = await request.json()
+    const action = String(body.action || '')
+
+    const loadStatus = async () => {
+      const [{ data: settings }, { data: secret }] = await Promise.all([
+        client.from('communication_settings').select('*').eq('provider', 'resend').maybeSingle(),
+        client.from('integration_secrets').select('key_suffix').eq('provider', 'resend').maybeSingle(),
+      ])
+      return {
+        configured: Boolean(secret),
+        provider: 'resend',
+        senderName: settings?.sender_name || 'IVM Program',
+        senderEmail: settings?.sender_email || 'support@contact.splatterin.com',
+        replyTo: settings?.reply_to || 'support@contact.splatterin.com',
+        lastTestedAt: settings?.last_tested_at || null,
+        lastTestStatus: settings?.last_test_status || null,
+        keySuffix: secret?.key_suffix || null,
+      }
+    }
+
+    if (action === 'status') return json({ ok: true, status: await loadStatus() })
+
+    if (action === 'save') {
+      const senderName = String(body.senderName || '').trim()
+      const senderEmail = String(body.senderEmail || '').trim()
+      const replyTo = String(body.replyTo || '').trim()
+      const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
+      if (!senderName || !validEmail(senderEmail) || !validEmail(replyTo)) return json({ ok: false, error: 'Enter a valid sender name, sender email, and reply-to address.' }, 400)
+      if (apiKey && !apiKey.startsWith('re_')) return json({ ok: false, error: 'The Resend API key must begin with re_.' }, 400)
+
+      const { error: settingsError } = await client.from('communication_settings').upsert({ provider: 'resend', sender_name: senderName, sender_email: senderEmail, reply_to: replyTo, updated_at: new Date().toISOString() })
+      if (settingsError) throw settingsError
+      if (apiKey) {
+        const { error: secretError } = await client.from('integration_secrets').upsert({ provider: 'resend', api_key: apiKey, key_suffix: apiKey.slice(-4), updated_at: new Date().toISOString() })
+        if (secretError) throw secretError
+      }
+      await client.from('integration_audit_log').insert({ provider: 'resend', action: apiKey ? 'configuration_and_key_updated' : 'configuration_updated', detail: { senderEmail, replyTo } })
+      return json({ ok: true, message: 'Resend configuration saved.', status: await loadStatus() })
+    }
+
+    if (action === 'test') {
+      const recipient = String(body.recipient || '').trim()
+      const subject = String(body.subject || 'IVM Program Test Email').trim()
+      const message = String(body.message || '').trim()
+      if (!validEmail(recipient)) return json({ ok: false, error: 'Enter a valid recipient email address.' }, 400)
+
+      const [{ data: settings }, { data: secret }] = await Promise.all([
+        client.from('communication_settings').select('*').eq('provider', 'resend').single(),
+        client.from('integration_secrets').select('api_key').eq('provider', 'resend').single(),
+      ])
+      if (!secret?.api_key) return json({ ok: false, error: 'Resend is not configured.' }, 400)
+
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret.api_key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: `${settings.sender_name} <${settings.sender_email}>`,
+          to: [recipient],
+          reply_to: settings.reply_to,
+          subject,
+          text: message,
+          html: `<div style="font-family:Arial,sans-serif;line-height:1.55;color:#0f172a"><h2>${subject.replace(/[<>]/g, '')}</h2><p>${message.replace(/[&<>]/g, (char: string) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char]!)).replace(/\n/g, '<br>')}</p><hr><p style="font-size:12px;color:#64748b">Sent by the IVM Program Decision Platform.</p></div>`,
+        }),
+      })
+      const payload = await response.json()
+      const sentAt = new Date().toISOString()
+      const success = response.ok
+      await client.from('communication_settings').update({ last_tested_at: sentAt, last_test_status: success ? 'success' : 'failed', updated_at: sentAt }).eq('provider', 'resend')
+      await client.from('integration_audit_log').insert({ provider: 'resend', action: success ? 'test_email_sent' : 'test_email_failed', detail: { recipient, providerResponse: payload } })
+      if (!success) return json({ ok: false, error: payload?.message || 'Resend rejected the test email.' }, response.status)
+      return json({ ok: true, message: 'Test email accepted by Resend.', messageId: payload.id, sentAt })
+    }
+
+    return json({ ok: false, error: 'Unknown action.' }, 400)
+  } catch (error) {
+    console.error(error)
+    return json({ ok: false, error: error instanceof Error ? error.message : 'Unexpected communication error.' }, 500)
+  }
+})
