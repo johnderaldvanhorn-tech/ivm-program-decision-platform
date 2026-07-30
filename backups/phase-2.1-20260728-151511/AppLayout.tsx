@@ -15,7 +15,7 @@ const phases:Phase[]=[
   {label:'Service Capacity',description:'Operational feasibility',items:[{label:'Staffing',to:'/staffing',icon:Users}]},
   {label:'Data Management',items:[{label:'Imports & Readiness',to:'/data-management',icon:Database},{label:'Sync Conflicts',to:'/sync-conflicts',icon:AlertTriangle}]},
   {label:'Model & Evaluation',items:[{label:'Reports',to:'/reports',icon:FileText},{label:'Calculations',to:'/calculations',icon:Sigma}]},
-  {label:'Administration',items:[{label:'Settings',to:'/settings',icon:Settings},{label:'Users & Access',to:'/settings/users',icon:Users},{label:'Integrations',to:'/settings/integrations',icon:PlugZap}]},
+  {label:'Administration',items:[{label:'Settings',to:'/settings',icon:Settings},{label:'Integrations',to:'/settings/integrations',icon:PlugZap}]},
  ]},
  {label:'Phase 2 — Decision Support',tone:'violet',groups:[
   {label:'Optimization',items:[{label:'Optimization Center',to:'/phase-2/optimization',icon:Sparkles},{label:'Recommendations',to:'/phase-2/recommendations',icon:ListChecks},{label:'Scenario Comparison',to:'/phase-2/scenarios',icon:FlaskConical}]},
